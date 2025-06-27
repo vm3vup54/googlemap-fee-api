@@ -6,6 +6,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from urllib.parse import urlencode
+import decimal
 
 load_dotenv()
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
@@ -17,6 +18,9 @@ gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
 class RouteRequest(BaseModel):
     origin: str
     destination: str
+
+def round_half_up(n):
+    return int(decimal.Decimal(n).to_integral_value(rounding=decimal.ROUND_HALF_UP))
 
 def upload_to_imgbb(image_path: str) -> str:
     with open(image_path, "rb") as file:
@@ -41,7 +45,6 @@ def get_route(data: RouteRequest):
         if not directions:
             raise HTTPException(status_code=404, detail="無法取得路線")
 
-        # 所有路線的距離與時間
         routes = []
         best_duration = float("inf")
         best_leg = None
@@ -57,13 +60,11 @@ def get_route(data: RouteRequest):
                 best_duration = duration_min
                 best_leg = leg
 
-        # 最佳路線計費
         best_distance = best_leg["distance"]["value"] / 1000
-        fee = int(round(best_distance * 2 * 3))  # 四捨五入後取整數
+        fee = round_half_up(best_distance * 2 * 3)
         today = datetime.today().strftime("%Y-%m-%d")
         report = f"{today} {data.origin}-{data.destination}【自行開車 {best_distance:.1f}(公里數)*3(元/公里)*2(來回)={fee}(費用)】"
 
-        # 靜態地圖圖片
         static_map_url = (
             "https://maps.googleapis.com/maps/api/staticmap?" +
             urlencode({
