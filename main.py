@@ -36,12 +36,11 @@ def get_route(data: RouteRequest):
             data.destination,
             mode="driving",
             departure_time=datetime.now(),
-            alternatives=True  # 所有可行路線
+            alternatives=True
         )
         if not directions:
             raise HTTPException(status_code=404, detail="無法取得路線")
 
-        # 取得所有路線距離與時間
         routes = []
         best_duration = float("inf")
         best_leg = None
@@ -57,16 +56,14 @@ def get_route(data: RouteRequest):
                 best_duration = duration_min
                 best_leg = leg
 
-        # 計算費用（取最佳路線）
         best_distance = best_leg["distance"]["value"] / 1000
-        fee = round(best_distance * 2 * 3)  # 四捨五入取到整數
+        fee = round(best_distance * 2 * 3)
         today = datetime.today().strftime("%Y-%m-%d")
         report = f"{today} {data.origin}-{data.destination}【自行開車 {best_distance:.1f}(公里數)*3(元/公里)*2(來回)={fee}(費用)】"
 
-        # 下載靜態地圖
         static_map_url = (
-            "https://maps.googleapis.com/maps/api/staticmap?"
-            + urlencode({
+            "https://maps.googleapis.com/maps/api/staticmap?" +
+            urlencode({
                 "size": "600x400",
                 "path": f"enc:{directions[0]['overview_polyline']['points']}",
                 "markers": f"color:red|label:A|{data.origin}",
@@ -80,6 +77,7 @@ def get_route(data: RouteRequest):
             f.write(img_data)
 
         map_url = upload_to_imgbb(image_path)
+        map_link = f"https://www.google.com/maps/dir/{data.origin}/{data.destination}"
 
         return {
             "routes": routes,
@@ -87,7 +85,8 @@ def get_route(data: RouteRequest):
             "duration_min": best_duration,
             "fee": fee,
             "report": report,
-            "map_url": map_url
+            "map_url": map_url,
+            "map_link": map_link  # ✅ 已加入 Google Maps 連結
         }
 
     except Exception as e:
