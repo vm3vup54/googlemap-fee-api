@@ -1,86 +1,90 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import googlemaps
 from datetime import datetime
+import googlemaps
 import os
 import requests
-from urllib.parse import urlencode
 from dotenv import load_dotenv
-from fastapi.staticfiles import StaticFiles
+from urllib.parse import urlencode
 
-# 載入 .env
 load_dotenv()
-API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
 app = FastAPI()
-
-# 設定靜態檔案路徑
-os.makedirs("static/maps", exist_ok=True)
-app.mount("/maps", StaticFiles(directory="static/maps"), name="maps")
-
-# Google Maps 客戶端
-gmaps = googlemaps.Client(key=API_KEY)
+gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
 
 class RouteRequest(BaseModel):
     origin: str
     destination: str
 
-def download_map(origin, destination):
-    base_url = "https://maps.googleapis.com/maps/api/staticmap"
-    params = {
-        "size": "600x400",
-        "maptype": "roadmap",
-        "markers": f"color:blue|label:S|{origin}&markers=color:red|label:E|{destination}",
-        "path": f"color:0x0000ff|weight:5|{origin}|{destination}",
-        "key": API_KEY
-    }
-    full_url = f"{base_url}?{urlencode(params)}"
-    response = requests.get(full_url)
-    if response.status_code == 200:
-        filename = f"map_{datetime.now().timestamp()}.png"
-        save_path = f"static/maps/{filename}"
-        with open(save_path, "wb") as f:
-            f.write(response.content)
-        return f"/maps/{filename}"  # 回傳靜態檔網址
-    else:
-        return None
+def upload_to_imgbb(image_path: str) -> str:
+    with open(image_path, "rb") as file:
+        res = requests.post(
+            "https://api.imgbb.com/1/upload",
+            params={"key": IMGBB_API_KEY},
+            files={"image": file}
+        )
+    data = res.json()
+    return data["data"]["url"] if res.ok else None
 
-@app.post("/")
-def gpt_route(data: RouteRequest):
+@app.post("/route")
+def get_route(data: RouteRequest):
     try:
         directions = gmaps.directions(
-            data.origin, data.destination,
+            data.origin,
+            data.destination,
             mode="driving",
-            alternatives=True,
-            departure_time=datetime.now()
+            departure_time=datetime.now(),
+            alternatives=True  # 所有可行路線
         )
-
         if not directions:
             raise HTTPException(status_code=404, detail="無法取得路線")
 
-        # 所有路線摘要
-        results = []
-        for i, route in enumerate(directions):
-            leg = route['legs'][0]
-            results.append({
-                "route_index": i + 1,
-                "distance_km": round(leg['distance']['value'] / 1000, 1),
-                "duration_min": leg['duration']['value'] // 60
+        # 取得所有路線距離與時間
+        routes = []
+        best_duration = float("inf")
+        best_leg = None
+        for route in directions:
+            leg = route["legs"][0]
+            duration_min = leg["duration"]["value"] // 60
+            distance_km = leg["distance"]["value"] / 1000
+            routes.append({
+                "distance_km": round(distance_km, 1),
+                "duration_min": duration_min
             })
+            if duration_min < best_duration:
+                best_duration = duration_min
+                best_leg = leg
 
-        # 只用第一條（最佳）路線計費
-        best_leg = directions[0]['legs'][0]
-        best_distance_km = round(best_leg['distance']['value'] / 1000, 1)
-        fee = round(best_distance_km * 2 * 3)
-
+        # 計算費用（取最佳路線）
+        best_distance = best_leg["distance"]["value"] / 1000
+        fee = round(best_distance * 2 * 3)  # 四捨五入取到整數
         today = datetime.today().strftime("%Y-%m-%d")
-        report = f"{today} {data.origin}-{data.destination}【自行開車 {best_distance_km:.1f}(公里數)*3(元/公里)*2(來回)={fee}(費用)】"
-        
-        # 下載地圖
-        map_url = download_map(data.origin, data.destination)
+        report = f"{today} {data.origin}-{data.destination}【自行開車 {best_distance:.1f}(公里數)*3(元/公里)*2(來回)={fee}(費用)】"
+
+        # 下載靜態地圖
+        static_map_url = (
+            "https://maps.googleapis.com/maps/api/staticmap?"
+            + urlencode({
+                "size": "600x400",
+                "path": f"enc:{directions[0]['overview_polyline']['points']}",
+                "markers": f"color:red|label:A|{data.origin}",
+                "markers": f"color:green|label:B|{data.destination}",
+                "key": GOOGLE_MAPS_API_KEY
+            })
+        )
+        image_path = "map.png"
+        with open(image_path, "wb") as f:
+            img_data = requests.get(static_map_url).content
+            f.write(img_data)
+
+        map_url = upload_to_imgbb(image_path)
 
         return {
-            "routes": results,
+            "routes": routes,
+            "distance_km": round(best_distance, 1),
+            "duration_min": best_duration,
             "fee": fee,
             "report": report,
             "map_url": map_url
@@ -88,3 +92,7 @@ def gpt_route(data: RouteRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/")
+def gpt_route(data: RouteRequest):
+    return get_route(data)
