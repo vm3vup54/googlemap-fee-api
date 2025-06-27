@@ -38,3 +38,7 @@ def get_route(data: RouteRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/")
+def gpt_route(data: RouteRequest):
+    return get_route(data)
